@@ -20,7 +20,7 @@ func services() []supervisor.Service {
 	return []supervisor.Service{
 		{Name: "postgres", Dir: "server", Kind: supervisor.Oneshot, Run: "just db-up", Stop: "just db-down"},
 		{Name: "server", Dir: "server", Kind: supervisor.Daemon, Run: env + "just run"},
-		{Name: "admin", Dir: "admin", Kind: supervisor.Daemon, Run: "just run"},
+		{Name: "admin", Dir: "admin", Kind: supervisor.Daemon, Run: "just build && just run"},
 		{Name: "dispatcher", Dir: "npc", Kind: supervisor.Daemon,
 			Run: env + "just run-dispatcher -server localhost:60000 -stats :8091 -bots 2"},
 		{Name: "client", Dir: "client", Kind: supervisor.Daemon, Run: "just build && just run", Optional: true},
