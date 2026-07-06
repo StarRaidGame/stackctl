@@ -1,0 +1,5 @@
+# Compiled binary (matches the module/dir name)
+/stackctl
+# Captured service logs (see LogBuffer tee — later slice)
+/logs/
+*.log
