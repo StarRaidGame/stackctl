@@ -1,7 +1,7 @@
-// Command stackctl is the StarRaid stack control-center. For now it runs headless:
-// it brings the stack up, prints a status table, and stops everything cleanly on
-// Ctrl-C. The Bubble Tea TUI (service table + logs + CPU/mem + game telemetry)
-// replaces this driver in the next slice (see ../../.claude/plans/stackctl-tui.md).
+// Command stackctl is the StarRaid stack control-center. By default it opens the
+// Bubble Tea TUI (service table + logs + CPU/mem + game telemetry); with -headless
+// (or when stdout is not a terminal) it brings the stack up, prints a status
+// table, and stops everything cleanly on Ctrl-C. See ../../.claude/plans/stackctl-tui.md.
 package main
 
 import (
@@ -15,14 +15,34 @@ import (
 	"time"
 
 	"github.com/StarRaidGame/stackctl/internal/supervisor"
+	"github.com/StarRaidGame/stackctl/internal/tui"
 )
 
 func main() {
 	root := flag.String("root", defaultRoot(), "stack root: the directory holding the component submodules")
+	headless := flag.Bool("headless", false, "no TUI: bring the stack up, print status, Ctrl-C to stop")
+	statsAddr := flag.String("stats", statsAddr(), "server /stats address for the telemetry pane")
 	flag.Parse()
 
 	sup := supervisor.New(*root, services())
-	fmt.Printf("stackctl — stack root: %s\n", *root)
+
+	if *headless || !isTerminal() {
+		runHeadless(sup, *root)
+		return
+	}
+	if err := tui.Run(sup, *statsAddr); err != nil {
+		fmt.Fprintln(os.Stderr, "tui error:", err)
+		os.Exit(1)
+	}
+	// The TUI has exited — stop the stack so nothing is left orphaned.
+	fmt.Println("stopping the stack…")
+	sup.StopAll()
+}
+
+// runHeadless brings the non-optional services up, prints a status table on a
+// ticker, and stops everything on SIGINT/SIGTERM. This is the CI / no-TTY path.
+func runHeadless(sup *supervisor.Supervisor, root string) {
+	fmt.Printf("stackctl (headless) — stack root: %s\n", root)
 	fmt.Println("bringing the stack up (Ctrl-C to stop everything)…")
 	sup.StartAll()
 
@@ -45,7 +65,6 @@ func main() {
 	}
 }
 
-// printStatus renders the current service table.
 func printStatus(sup *supervisor.Supervisor) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintf(w, "\nSERVICE\tSTATUS\tPID\tUPTIME\n")
@@ -66,15 +85,27 @@ func printStatus(sup *supervisor.Supervisor) {
 	_ = w.Flush()
 }
 
-// defaultRoot finds the stack root: STARRAID_ROOT if set, else the nearest of `..`
-// or `.` (or the parent of the cwd when launched from within stackctl/) that holds
-// a .gitmodules — the meta repo. Falls back to `..`.
+func isTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// statsAddr is the server's /stats address, matching the server's STARRAID_ADMIN.
+func statsAddr() string {
+	if v := os.Getenv("STARRAID_ADMIN"); v != "" {
+		return v
+	}
+	return ":8080"
+}
+
+// defaultRoot finds the stack root: STARRAID_ROOT if set, else the parent of the
+// cwd when launched from within stackctl/, else the nearest of `.`/`..` holding a
+// .gitmodules (the meta repo). Falls back to `..`.
 func defaultRoot() string {
 	if v := os.Getenv("STARRAID_ROOT"); v != "" {
 		return v
 	}
-	wd, err := os.Getwd()
-	if err == nil {
+	if wd, err := os.Getwd(); err == nil {
 		if filepath.Base(wd) == "stackctl" {
 			return filepath.Dir(wd)
 		}
