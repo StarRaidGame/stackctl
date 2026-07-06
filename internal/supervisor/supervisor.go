@@ -115,10 +115,13 @@ func (s *Supervisor) startDaemon(in *instance) error {
 	go func() {
 		err := cmd.Wait()
 		in.mu.Lock()
-		if in.state == Stopping {
+		switch {
+		case in.state == Stopping:
 			in.state = Stopped // exit we asked for
-		} else {
-			in.state, in.lastErr = Crashed, err // exited on its own
+		case err != nil:
+			in.state, in.lastErr = Crashed, err // died non-zero on its own
+		default:
+			in.state = Stopped // exited cleanly on its own (e.g. a stub that returns)
 		}
 		in.pid = 0
 		in.mu.Unlock()
