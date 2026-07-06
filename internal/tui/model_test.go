@@ -15,7 +15,7 @@ func TestViewRendersSectionsWithoutPanic(t *testing.T) {
 		{Name: "server", Dir: ".", Kind: supervisor.Daemon, Run: "true"},
 		{Name: "admin", Dir: ".", Kind: supervisor.Daemon, Run: "true", Optional: true},
 	})
-	m := New(sup, ":0")
+	m := New(sup, ":0", ":0")
 
 	if m.View() == "" {
 		t.Fatal("view before window size should not be empty")

@@ -22,6 +22,7 @@ func main() {
 	root := flag.String("root", defaultRoot(), "stack root: the directory holding the component submodules")
 	headless := flag.Bool("headless", false, "no TUI: bring the stack up, print status, Ctrl-C to stop")
 	statsAddr := flag.String("stats", statsAddr(), "server /stats address for the telemetry pane")
+	dispAddr := flag.String("dispatcher", dispatcherAddr(), "npc dispatcher /stats address (NPC count)")
 	flag.Parse()
 
 	sup := supervisor.New(*root, services())
@@ -30,7 +31,7 @@ func main() {
 		runHeadless(sup, *root)
 		return
 	}
-	if err := tui.Run(sup, *statsAddr); err != nil {
+	if err := tui.Run(sup, *statsAddr, *dispAddr); err != nil {
 		fmt.Fprintln(os.Stderr, "tui error:", err)
 		os.Exit(1)
 	}
@@ -96,6 +97,15 @@ func statsAddr() string {
 		return v
 	}
 	return ":8080"
+}
+
+// dispatcherAddr is the npc dispatcher's /stats address (matches the -stats flag
+// stackctl passes it in the manifest).
+func dispatcherAddr() string {
+	if v := os.Getenv("STARRAID_DISPATCHER"); v != "" {
+		return v
+	}
+	return ":8091"
 }
 
 // defaultRoot finds the stack root: STARRAID_ROOT if set, else the parent of the

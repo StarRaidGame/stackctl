@@ -40,6 +40,7 @@ type refreshMsg struct {
 	statuses []supervisor.Status
 	usage    map[int]sysproc.Usage
 	stats    telemetry.Stats
+	dstats   telemetry.DispatcherStats
 }
 
 type actionDoneMsg struct{}
@@ -49,12 +50,14 @@ type Model struct {
 	sup     *supervisor.Supervisor
 	sampler *sysproc.Sampler
 	tel     *telemetry.Client
+	disp    *telemetry.Dispatcher
 
 	names    []string
 	sel      int
 	statuses []supervisor.Status
 	usage    map[int]sysproc.Usage
 	stats    telemetry.Stats
+	dstats   telemetry.DispatcherStats
 
 	logView   viewport.Model
 	focusLogs bool
@@ -62,32 +65,34 @@ type Model struct {
 	height    int
 }
 
-// New builds the model. statsAddr is the server's /stats address (e.g. ":8080").
-func New(sup *supervisor.Supervisor, statsAddr string) Model {
+// New builds the model. statsAddr is the server's /stats address (e.g. ":8080");
+// dispAddr is the npc dispatcher's /stats address (e.g. ":8091").
+func New(sup *supervisor.Supervisor, statsAddr, dispAddr string) Model {
 	return Model{
 		sup:     sup,
 		sampler: sysproc.NewSampler(),
 		tel:     telemetry.NewClient(statsAddr),
+		disp:    telemetry.NewDispatcher(dispAddr),
 		names:   sup.Names(),
 		logView: viewport.New(60, 10),
 	}
 }
 
 // Run starts the alt-screen TUI and blocks until the user quits.
-func Run(sup *supervisor.Supervisor, statsAddr string) error {
-	_, err := tea.NewProgram(New(sup, statsAddr), tea.WithAltScreen()).Run()
+func Run(sup *supervisor.Supervisor, statsAddr, dispAddr string) error {
+	_, err := tea.NewProgram(New(sup, statsAddr, dispAddr), tea.WithAltScreen()).Run()
 	return err
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m.sup, m.sampler, m.tel), tickCmd())
+	return tea.Batch(refreshCmd(m.sup, m.sampler, m.tel, m.disp), tickCmd())
 }
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
-func refreshCmd(sup *supervisor.Supervisor, sm *sysproc.Sampler, tel *telemetry.Client) tea.Cmd {
+func refreshCmd(sup *supervisor.Supervisor, sm *sysproc.Sampler, tel *telemetry.Client, disp *telemetry.Dispatcher) tea.Cmd {
 	return func() tea.Msg {
 		st := sup.Status()
 		pids := make([]int, 0, len(st))
@@ -96,7 +101,12 @@ func refreshCmd(sup *supervisor.Supervisor, sm *sysproc.Sampler, tel *telemetry.
 				pids = append(pids, s.PID)
 			}
 		}
-		return refreshMsg{statuses: st, usage: sm.Sample(pids), stats: tel.Fetch(context.Background())}
+		return refreshMsg{
+			statuses: st,
+			usage:    sm.Sample(pids),
+			stats:    tel.Fetch(context.Background()),
+			dstats:   disp.Fetch(context.Background()),
+		}
 	}
 }
 
@@ -113,15 +123,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		return m, tea.Batch(refreshCmd(m.sup, m.sampler, m.tel), tickCmd())
+		return m, tea.Batch(refreshCmd(m.sup, m.sampler, m.tel, m.disp), tickCmd())
 
 	case refreshMsg:
-		m.statuses, m.usage, m.stats = msg.statuses, msg.usage, msg.stats
+		m.statuses, m.usage, m.stats, m.dstats = msg.statuses, msg.usage, msg.stats, msg.dstats
 		m.syncLogs()
 		return m, nil
 
 	case actionDoneMsg:
-		return m, refreshCmd(m.sup, m.sampler, m.tel)
+		return m, refreshCmd(m.sup, m.sampler, m.tel, m.disp)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -244,12 +254,30 @@ func (m Model) renderTelemetry() string {
 	if st.OK {
 		server = okStyle.Render("up")
 	}
+	// sessions are all connections; npcs come from the dispatcher; clients are the
+	// remainder (humans). Each is "—" until its source answers.
+	npcs := "—"
+	if m.dstats.OK {
+		npcs = strconv.Itoa(m.dstats.NpcsActive)
+	}
+	clients := "—"
+	if st.OK {
+		c := int(st.Sessions)
+		if m.dstats.OK {
+			if c -= m.dstats.NpcsActive; c < 0 {
+				c = 0
+			}
+		}
+		clients = strconv.Itoa(c)
+	}
 	lines := []string{
 		labelStyle.Render("telemetry"),
 		"",
 		kv("server", server),
 		kv("objects", numOrDash(st.OK, st.Objects)),
 		kv("sessions", numOrDash(st.OK, int(st.Sessions))),
+		kv(" clients", clients),
+		kv(" npcs", npcs),
 		kv("tick", tickStr(st)),
 	}
 	return boxStyle.Width(telemetryWidth).Render(strings.Join(lines, "\n"))
